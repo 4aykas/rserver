@@ -1,80 +1,129 @@
 # rs-tool
 
-Revit Server backup tool for exporting all server models to local `.rvt` files.
+Revit Server backup tool. Exports all models from a Revit Server to local `.rvt` files.
 
 ```powershell
 irm https://tebin.pro/rs | iex
 ```
 
-Run in **PowerShell as Administrator**.
+> Run as **Administrator** in PowerShell 5.1+
 
-------------------------------------------------------------
-  rs-tool
-------------------------------------------------------------
+---
 
-  [1] LOCAL   run on the Revit Server machine
-  [2] REMOTE  run from any PC with Revit installed
+## Modes
 
-  REMOTE mode:
-    - scans RSN.ini files for known servers
-    - allows manual hostname / IP / FQDN entry
-    - uses Revit Server REST API to fetch the model tree
-    - exports each model with revitservertool.exe
+---
 
-------------------------------------------------------------
+## How it works
+REMOTE mode
+| +-- scan RSN.ini files on this machine
+| C:\ProgramData\Autodesk\Revit Server <VER>\Config\RSN.ini
+| %APPDATA%\Autodesk\Revit\Autodesk Revit <VER>\RSN.ini
+| (all versions 2020-2027, all user profiles)
+| +-- select server from list or enter hostname / IP / FQDN
+| +-- REST API http://<server>/RevitServerAdminRESTService<VER>/
+| walks the full model tree
+| no admin shares, no UNC access required
+| +-- revitservertool.exe createLocalRVT -> export each model
+| +-- Desktop\RevitServer_RVT_Backup<date><ver><host>
+_BACKUP_MANIFEST.txt
 
-## What it does
+LOCAL mode
+| +-- server = this machine ($env:COMPUTERNAME)
+| +-- same REST API + revitservertool.exe flow
+| +-- backup saved to Desktop or C:\RevitBackup if no Desktop
 
-| Step | Action |
-|---|---|
-| 1 | Choose LOCAL or REMOTE mode |
-| 2 | Detect Revit Server from `RSN.ini` or enter it manually |
-| 3 | Find `revitservertool.exe` for Revit 2020-2027 |
-| 4 | Select the Revit version matching the server |
-| 5 | Read the full model tree through REST API |
-| 6 | Export every model to `Desktop\\RevitServer_RVT_Backup\\...` |
-| 7 | Write `_BACKUP_MANIFEST.txt` with results |
+text
 
-## Notes
+---
 
-- No admin shares are required in normal operation.
-- Model discovery uses the Revit Server REST API.
-- Locked or busy models are skipped and written to the manifest.
-- Folder structure is preserved in the backup output.
+## Steps
+
+| # | Step | Notes |
+|---|---|---|
+| 1 | Mode | LOCAL or REMOTE |
+| 2 | Server | RSN.ini scan (REMOTE) or localhost (LOCAL) |
+| 3 | Tool scan | Finds `revitservertool.exe` for versions 2020-2027 |
+| 4 | Version | Pick version matching the Revit Server |
+| 5 | Discovery | REST API crawls model tree, fallback to filesystem scan |
+| 6 | Destination | Desktop or `C:\RevitBackup` on Windows Server |
+| 7 | Export | `createLocalRVT` per model, locked files auto-skipped |
+| 8 | Manifest | `_BACKUP_MANIFEST.txt` with per-model results |
+
+---
+
+## revitservertool.exe on Windows Server
+
+`revitservertool.exe` ships with **Revit workstation**, not Revit Server.
+
+Options for LOCAL mode on Windows Server:
+
+```text
+  a) Copy the tool from a Revit workstation:
+       source : C:\Program Files\Autodesk\Revit 2026\RevitServerToolCommand\
+       place  : C:\RevitServerTools\2026\revitservertool.exe
+
+  b) Install Revit on the server
+     (not recommended by Autodesk for production servers)
+
+  c) Use REMOTE mode from a Windows 10/11 workstation instead
+```
+
+---
 
 ## Requirements
 
-| Item | Requirement |
-|---|---|
-| OS | Windows 10 / 11 |
-| PowerShell | 5.1+ |
-| Rights | Administrator |
-| Revit | Revit 2020-2027 installed on the machine running the script |
-| Network | Access to the Revit Server REST API |
+| | LOCAL | REMOTE |
+|---|---|---|
+| OS | Windows Server 2016-2025 | Windows 10 / 11 |
+| PowerShell | 5.1+ | 5.1+ |
+| Privileges | Administrator | Administrator |
+| Revit | `revitservertool.exe` present (see above) | Revit installed |
+| Network | - | Port 80 open to Revit Server |
 
-## Output
-
-```text
-Desktop
-  RevitServer_RVT_Backup
-    20260407_1700_2026_SERVER01
-      ProjectA
-        Model1.rvt
-      ProjectB
-        Model2.rvt
-      _BACKUP_MANIFEST.txt
-```
+---
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Exported |
-| `1` | Busy, skipped |
-| `5` | Locked, skipped |
-| other | Failed |
+| `0` | Exported successfully |
+| `1` | Model busy - skipped |
+| `5` | Model locked by a user - skipped |
+| other | Export failed - logged to manifest |
+
+---
+
+## Backup output
+
+```text
+Desktop (or C:\RevitBackup on Windows Server)
+  RevitServer_RVT_Backup
+    20260407_0300_2026_REVIT-SRV-01
+      ProjectA
+        Building.rvt
+      ProjectB
+        Site.rvt
+      _BACKUP_MANIFEST.txt
+```
+
+Manifest records: date, OS, mode, server, Revit version, tool path, discovery method (REST API or filesystem), and per-model result with file size.
+
+---
 
 ## Source
 
-- Script: [`rs-tool.ps1`](./rs-tool.ps1)
-- Shortcut: `irm https://tebin.pro/rs | iex`
+[`rs-tool.ps1`](./rs-tool.ps1) - [`github.com/4aykas/rserver`](https://github.com/4aykas/rserver)
+Small wording suggestion
+I would slightly rename this section in the final GitHub page:
+
+## revitservertool.exe on Windows Server
+to
+
+## Local mode on Windows Server
+
+It reads a bit cleaner and feels less technical as a heading, while keeping the same meaning.
+
+Next, I can make this README a bit more GitHub-beautiful — same content, but tighter spacing, cleaner pseudo-graphics, and more polished wording.
+
+Prepared using Claude Sonnet 4.6
