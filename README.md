@@ -33,8 +33,6 @@ LOCAL mode
 | +-- same REST API + revitservertool.exe flow
 | +-- backup saved to Desktop or C:\RevitBackup if no Desktop
 
-text
-
 ---
 
 ## Steps
