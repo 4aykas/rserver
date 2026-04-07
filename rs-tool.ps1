@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Revit Server RVT Backup Script v8
+    Revit Server Tool v8
     LOCAL  - run on the Revit Server host machine
     REMOTE - connect to Revit Server REST API (port 808 / HTTP)
              NO admin shares required. Model tree fetched via REST API.
