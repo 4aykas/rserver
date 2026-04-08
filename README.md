@@ -11,33 +11,42 @@ irm https://tebin.pro/rs | iex
 ---
 
 ## Modes
-LOCAL run directly on the Revit Server host
 
-Windows Server 2016 / 2019 / 2022 / 2025
-revitservertool.exe is part of Revit Server installation
+**LOCAL** — run directly on the Revit Server host
+- Windows Server 2016 / 2019 / 2022 / 2025
+- `revitservertool.exe` is part of Revit Server installation
 
-REMOTE run from a Revit workstation
-
-Windows 10 / 11
-connects to the server over the network
+**REMOTE** — run from a Revit workstation
+- Windows 10 / 11
+- connects to the server over the network
 
 ---
 
 ## How it works
+
+```
 REMOTE mode
-| +-- scan RSN.ini on this machine (all versions 2020-2027, all users)
-| +-- select server from list or enter hostname / IP / FQDN
-| +-- REST API http://<server>/RevitServerAdminRESTService<VER>/
-| walks full model tree - no admin shares needed
-| +-- revitservertool.exe createLocalRVT -> export each model
-| +-- Desktop\RevitServer_RVT_Backup<date><ver><host>
-_BACKUP_MANIFEST.txt
+|
++-- scan RSN.ini on this machine (all versions 2020-2027, all users)
+|
++-- select server from list or enter hostname / IP / FQDN
+|
++-- REST API http://<server>/RevitServerAdminRESTService/
+|   walks full model tree - no admin shares needed
+|
++-- revitservertool.exe createLocalRVT -> export each model
+|
++-- Desktop\RevitServer_RVT_Backup  _BACKUP_MANIFEST.txt
 
 LOCAL mode
-| +-- server = this machine
-| +-- same REST API + revitservertool.exe flow
-| +-- backup saved to Desktop or C:\RevitBackup if no Desktop
-(configurable via $BackupRoot at top of script)
+|
++-- server = this machine
+|
++-- same REST API + revitservertool.exe flow
+|
++-- backup saved to Desktop or C:\RevitBackup if no Desktop
+     (configurable via $BackupRoot at top of script)
+```
 
 ---
 
@@ -85,10 +94,8 @@ LOCAL mode
 Desktop (or C:\RevitBackup on Windows Server)
   RevitServer_RVT_Backup
     20260407_0300_2026_REVIT-SRV-01
-      ProjectA
-        Building.rvt
-      ProjectB
-        Site.rvt
+      ProjectA Building.rvt
+      ProjectB Site.rvt
       _BACKUP_MANIFEST.txt
 ```
 
