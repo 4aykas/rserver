@@ -2,6 +2,8 @@
 
 Revit Server backup tool. Exports all models from a Revit Server to local `.rvt` files.
 
+Companion script: [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh Windows Server for the Revit Server installer — see [Preparing a server](#preparing-a-server-rs-prepps1).
+
 ```powershell
 irm https://tebin.pro/rs | iex
 ```
@@ -125,3 +127,26 @@ Desktop (or C:\RevitBackup on Windows Server)
 ```
 
 Manifest records: date, OS, mode, server, Revit version, tool version, discovery method (REST API or filesystem), and per-model result with file sizes.
+
+---
+
+## Preparing a server (`rs-prep.ps1`)
+
+Installs everything a fresh **Windows Server 2022 / 2025** needs before running the Revit Server installer, per Autodesk's official prerequisites:
+
+- **Web Server (IIS)** role with ASP, CGI, Server Side Includes, ASP.NET 4.8, and the IIS 6 Management Compatibility set (metabase, console, scripting tools, WMI)
+- **.NET Framework 4.8** ASP.NET + WCF HTTP/TCP Activation (presence of 4.8 itself is verified — it ships in-box)
+- optional inbound firewall rules: **TCP 80** (REST API / admin console) and **ICMPv4 echo** (Autodesk requires ping between hosts, accelerators, and workstations) — Domain + Private profiles
+
+```powershell
+# interactive
+.\rs-prep.ps1
+
+# unattended, including firewall rules
+.\rs-prep.ps1 -OpenFirewall -NonInteractive
+
+# dry run - show what would change
+.\rs-prep.ps1 -WhatIf
+```
+
+Run as **Administrator**. Reports whether a restart is required before installing Revit Server. Exit codes: `0` ready, `1` fatal / unsupported OS, `2` feature install failed.
