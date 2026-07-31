@@ -59,21 +59,43 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Local', 'Remote')]
+    # No validation attributes here on purpose: under `irm | iex` the
+    # attributes are applied to the default values themselves, and an
+    # empty $Mode / zero $RevitVersion fails ValidateSet/ValidateRange
+    # before the script runs. Validated manually just below instead.
     [string]$Mode,
 
     [string]$Server,
 
-    [ValidateRange(2020, 2035)]
     [int]$RevitVersion,
 
     [string]$BackupRoot = "",
 
-    [ValidateRange(0, 3650)]
     [int]$KeepLast = 0,
 
     [switch]$NonInteractive
 )
+
+if ($Mode -and $Mode -notin @('Local', 'Remote')) {
+    Write-Host "  [XX]  -Mode must be Local or Remote (got: $Mode)" -ForegroundColor Red
+    exit 1
+}
+if ($RevitVersion -ne 0 -and ($RevitVersion -lt 2020 -or $RevitVersion -gt 2035)) {
+    Write-Host "  [XX]  -RevitVersion must be 2020-2035 (got: $RevitVersion)" -ForegroundColor Red
+    exit 1
+}
+if ($KeepLast -lt 0) {
+    Write-Host "  [XX]  -KeepLast must be 0 or greater (got: $KeepLast)" -ForegroundColor Red
+    exit 1
+}
+
+# #Requires -RunAsAdministrator only guards file runs; via `irm | iex`
+# it is silently ignored, so check explicitly.
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "  [XX]  Run this in an elevated (Administrator) PowerShell." -ForegroundColor Red
+    exit 1
+}
 
 $script:Interactive   = -not $NonInteractive
 $script:VersionRange  = 2020..2028

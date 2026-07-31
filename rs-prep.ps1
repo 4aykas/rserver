@@ -55,6 +55,14 @@ param(
 
 $script:Interactive = -not $NonInteractive
 
+# #Requires -RunAsAdministrator only guards file runs; via `irm | iex`
+# it is silently ignored, so check explicitly.
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "  [XX]  Run this in an elevated (Administrator) PowerShell." -ForegroundColor Red
+    exit 1
+}
+
 # ----------------------------------------------------------------
 # HELPERS
 # ----------------------------------------------------------------

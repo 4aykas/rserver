@@ -12,6 +12,13 @@ non-interactive mode for scheduled runs.
 - Target **Windows PowerShell 5.1 compatibility** — no PS7-only syntax
   (no ternary, no `??`). The script runs via `irm https://tebin.pro/rs | iex`
   on customer servers, so `main` is effectively production.
+- **`irm | iex` constraints** (the primary distribution path, so they are
+  hard rules): no validation attributes (`ValidateSet`, `ValidateRange`) in
+  param blocks — under `iex` they are applied to the default values and an
+  empty/zero default throws `ValidationMetadataException` before the script
+  runs; validate manually in the body. And `#Requires` lines are silently
+  ignored under `iex` — enforce admin with an explicit
+  `WindowsPrincipal.IsInRole` check.
 - Validate before committing:
   - parse with both PS 5.1 and PS 7 parsers
   - `Invoke-ScriptAnalyzer -Severity Warning,Error` — `PSAvoidUsingWriteHost`
