@@ -8,6 +8,30 @@ irm https://tebin.pro/rs | iex
 
 > Run as **Administrator** in PowerShell 5.1+
 
+Runs the interactive wizard. For unattended runs (e.g. Task Scheduler), pass parameters:
+
+```powershell
+# nightly on the Revit Server host, keep 14 newest backups
+.\rs-tool.ps1 -Mode Local -BackupRoot D:\RevitBackup -KeepLast 14 -NonInteractive
+
+# unattended remote backup from a workstation
+.\rs-tool.ps1 -Mode Remote -Server REVIT-SRV-01 -RevitVersion 2026 -NonInteractive
+
+# one-liner with parameters
+& ([scriptblock]::Create((irm https://tebin.pro/rs))) -Mode Local -NonInteractive
+```
+
+| Parameter | Purpose |
+|---|---|
+| `-Mode Local\|Remote` | Skip the mode prompt |
+| `-Server <host>` | Revit Server hostname / IP / FQDN (Remote mode) |
+| `-RevitVersion <year>` | Pin the Revit version, e.g. `2026` |
+| `-BackupRoot <path>` | Backup destination root (default: Desktop, or `C:\RevitBackup`) |
+| `-KeepLast <n>` | After a run, keep only the newest N backup folders |
+| `-NonInteractive` | Never prompt — abort with exit 1 on missing input |
+
+Script exit codes: `0` all exported (or skipped busy/locked), `1` fatal error / bad input, `2` one or more exports failed — useful for Task Scheduler monitoring.
+
 ---
 
 ## Modes
@@ -27,7 +51,7 @@ irm https://tebin.pro/rs | iex
 ```
 REMOTE mode
 |
-+-- scan RSN.ini on this machine (all versions 2020-2027, all users)
++-- scan RSN.ini on this machine (all versions 2020-2028, all users)
 |
 +-- select server from list or enter hostname / IP / FQDN
 |
@@ -56,12 +80,13 @@ LOCAL mode
 |---|---|---|
 | 1 | Mode | LOCAL or REMOTE |
 | 2 | Server | RSN.ini scan (REMOTE) or localhost (LOCAL) |
-| 3 | Tool scan | Finds `revitservertool.exe` for versions 2020-2027 |
+| 3 | Tool scan | Finds `revitservertool.exe` for versions 2020-2028 |
 | 4 | Version | Pick version matching the Revit Server |
 | 5 | Discovery | REST API crawls model tree, fallback to filesystem scan |
 | 6 | Destination | Desktop or `C:\RevitBackup` (configurable) |
 | 7 | Export | `createLocalRVT` per model, locked files auto-skipped |
 | 8 | Manifest | `_BACKUP_MANIFEST.txt` with full per-model results |
+| 9 | Retention | With `-KeepLast N`, prunes old backup folders |
 
 ---
 

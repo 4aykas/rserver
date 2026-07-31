@@ -1,22 +1,83 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    rs-tool v9 - Revit Server Backup Tool
+    rs-tool v10 - Revit Server Backup Tool
+
+.DESCRIPTION
+    Exports all models from a Revit Server to local .rvt files.
 
     LOCAL   run directly on Windows Server with Revit Server installed
             revitservertool.exe is part of Revit Server package
 
     REMOTE  run from Windows 10/11 workstation with Revit installed
             connects to server via REST API - no admin shares needed
-#>
 
-# ----------------------------------------------------------------
-# CONFIG
-# Set explicit backup path for scheduled/headless runs on Server.
-# Leave empty to auto-resolve to current user Desktop.
-#   e.g. $BackupRoot = "D:\RevitBackup"
-# ----------------------------------------------------------------
-$BackupRoot = ""
+    Run without parameters for the interactive wizard.
+    Pass -Mode (plus -Server for Remote) to run unattended, e.g.
+    from Task Scheduler.
+
+.PARAMETER Mode
+    Local  - this machine is the Revit Server host
+    Remote - connect to a Revit Server over the network
+    Omit to choose interactively.
+
+.PARAMETER Server
+    Revit Server hostname, IP, or FQDN. Required for -Mode Remote when
+    running non-interactively. Ignored in Local mode.
+
+.PARAMETER RevitVersion
+    Revit version to use, e.g. 2026. Must match the Revit Server version.
+    Omit to auto-detect (single install) or choose interactively.
+
+.PARAMETER BackupRoot
+    Backup destination root. Defaults to the current user's Desktop,
+    falling back to C:\RevitBackup when no Desktop exists.
+
+.PARAMETER KeepLast
+    Keep only the newest N backup folders under RevitServer_RVT_Backup
+    and delete older ones after a successful run. 0 (default) keeps all.
+
+.PARAMETER NonInteractive
+    Never prompt. Missing required input aborts instead of asking.
+    Skips Clear-Host, the Explorer offer, and the final "Press Enter".
+
+.EXAMPLE
+    .\rs-tool.ps1
+    Interactive wizard.
+
+.EXAMPLE
+    .\rs-tool.ps1 -Mode Local -BackupRoot D:\RevitBackup -KeepLast 14 -NonInteractive
+    Scheduled nightly backup on the Revit Server host.
+
+.EXAMPLE
+    .\rs-tool.ps1 -Mode Remote -Server REVIT-SRV-01 -RevitVersion 2026 -NonInteractive
+    Unattended remote backup from a workstation.
+
+.NOTES
+    Exit codes: 0 = all models exported (or skipped as busy/locked),
+    1 = fatal error / bad input, 2 = one or more model exports failed.
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet('Local', 'Remote')]
+    [string]$Mode,
+
+    [string]$Server,
+
+    [ValidateRange(2020, 2035)]
+    [int]$RevitVersion,
+
+    [string]$BackupRoot = "",
+
+    [ValidateRange(0, 3650)]
+    [int]$KeepLast = 0,
+
+    [switch]$NonInteractive
+)
+
+$script:Interactive   = -not $NonInteractive
+$script:VersionRange  = 2020..2028
+$script:LastApiError  = $null
 
 # ----------------------------------------------------------------
 # HELPERS
@@ -35,8 +96,19 @@ function Write-Warn { param([string]$M) Write-Host "  [!!]  $M" -ForegroundColor
 function Write-Fail { param([string]$M) Write-Host "  [XX]  $M" -ForegroundColor Red        }
 function Write-Skip { param([string]$M) Write-Host "  [--]  $M" -ForegroundColor DarkYellow }
 
-function Get-BackupRoot {
-    if (-not [string]::IsNullOrWhiteSpace($BackupRoot)) { return $BackupRoot }
+function Read-Answer {
+    # Read-Host that aborts instead of hanging in non-interactive runs.
+    param([string]$Prompt, [string]$AbortReason = "input required")
+    if (-not $script:Interactive) {
+        Write-Fail "Non-interactive run needs more input: $AbortReason"
+        exit 1
+    }
+    return Read-Host $Prompt
+}
+
+function Get-EffectiveBackupRoot {
+    param([string]$Configured)
+    if (-not [string]::IsNullOrWhiteSpace($Configured)) { return $Configured }
     $d = [Environment]::GetFolderPath("Desktop")
     if ([string]::IsNullOrWhiteSpace($d)) { $d = Join-Path $env:USERPROFILE "Desktop" }
     if ([string]::IsNullOrWhiteSpace($d)) { $d = "C:\RevitBackup" }
@@ -49,7 +121,7 @@ function Get-BackupRoot {
 # Path separator: | (pipe).  Root contents: |/contents
 # Required headers: User-Name, User-Machine-Name, Operation-GUID
 # ----------------------------------------------------------------
-function New-RSNHeaders {
+function Get-RSNRequestHeader {
     return @{
         "User-Name"         = $env:USERNAME
         "User-Machine-Name" = $env:COMPUTERNAME
@@ -60,11 +132,14 @@ function New-RSNHeaders {
 function Invoke-RSNApi {
     param([string]$BaseUrl, [string]$ApiPath)
     try {
-        return Invoke-RestMethod -Uri "$BaseUrl/$ApiPath" -Headers (New-RSNHeaders) -Method GET -ErrorAction Stop
-    } catch { return $null }
+        return Invoke-RestMethod -Uri "$BaseUrl/$ApiPath" -Headers (Get-RSNRequestHeader) -Method GET -TimeoutSec 15 -ErrorAction Stop
+    } catch {
+        $script:LastApiError = $_.Exception.Message
+        return $null
+    }
 }
 
-function Get-RSNModels {
+function Get-RSNModelPath {
     param([string]$BaseUrl, [string]$FolderRSNPath = "")
     $results = [System.Collections.Generic.List[string]]::new()
     $apiPath = if ([string]::IsNullOrEmpty($FolderRSNPath)) { "|/contents" } else { "|$($FolderRSNPath.Replace('/', '|'))/contents" }
@@ -78,7 +153,7 @@ function Get-RSNModels {
     if ($resp.Folders) {
         foreach ($f in $resp.Folders) {
             $sub = if ([string]::IsNullOrEmpty($FolderRSNPath)) { $f.Name } else { "$FolderRSNPath/$($f.Name)" }
-            foreach ($r in (Get-RSNModels -BaseUrl $BaseUrl -FolderRSNPath $sub)) { $results.Add($r) }
+            foreach ($r in (Get-RSNModelPath -BaseUrl $BaseUrl -FolderRSNPath $sub)) { $results.Add($r) }
         }
     }
     return $results
@@ -93,10 +168,10 @@ $isWindowsServer = $osCaption -match "Server"
 # ----------------------------------------------------------------
 # HEADER
 # ----------------------------------------------------------------
-Clear-Host
+if ($script:Interactive) { Clear-Host }
 Write-Host ""
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
-Write-Host "   rs-tool v9  //  Revit Server Backup Tool"                        -ForegroundColor Cyan
+Write-Host "   rs-tool v10  //  Revit Server Backup Tool"                       -ForegroundColor Cyan
 Write-Host "   $($env:COMPUTERNAME)  //  $osCaption"                            -ForegroundColor DarkGray
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host ""
@@ -105,16 +180,22 @@ Write-Host ""
 # STEP 1 - Mode
 # ----------------------------------------------------------------
 Write-Title "Step 1: Run Mode"
-Write-Host "    [1]  LOCAL   this machine is the Revit Server host" -ForegroundColor Cyan
-Write-Host "    [2]  REMOTE  connect to a Revit Server over the network" -ForegroundColor Cyan
-Write-Host ""
 
-$modeInput = Read-Host "  Enter 1 or 2"
-$isRemote  = $false
-switch ($modeInput.Trim()) {
-    "1" { $isRemote = $false; Write-OK "Mode: LOCAL" }
-    "2" { $isRemote = $true;  Write-OK "Mode: REMOTE" }
-    default { Write-Fail "Invalid choice. Exiting."; exit 1 }
+$isRemote = $false
+if ($Mode) {
+    $isRemote = ($Mode -eq 'Remote')
+    Write-OK "Mode: $($Mode.ToUpper())  (from parameter)"
+} else {
+    Write-Host "    [1]  LOCAL   this machine is the Revit Server host" -ForegroundColor Cyan
+    Write-Host "    [2]  REMOTE  connect to a Revit Server over the network" -ForegroundColor Cyan
+    Write-Host ""
+
+    $modeInput = Read-Answer -Prompt "  Enter 1 or 2" -AbortReason "pass -Mode Local or -Mode Remote"
+    switch ($modeInput.Trim()) {
+        "1" { $isRemote = $false; Write-OK "Mode: LOCAL" }
+        "2" { $isRemote = $true;  Write-OK "Mode: REMOTE" }
+        default { Write-Fail "Invalid choice. Exiting."; exit 1 }
+    }
 }
 
 # ----------------------------------------------------------------
@@ -127,12 +208,15 @@ $serverHost = $null
 if (-not $isRemote) {
     $serverHost = $env:COMPUTERNAME
     Write-OK "Local machine: $serverHost"
+} elseif (-not [string]::IsNullOrWhiteSpace($Server)) {
+    $serverHost = $Server.Trim()
+    Write-OK "Server: $serverHost  (from parameter)"
 } else {
     $rsnCandidates = [System.Collections.Generic.List[string]]::new()
     $userDirs = @("C:\Users\$env:USERNAME") + @(
         Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
     )
-    foreach ($v in 2020..2027) {
+    foreach ($v in $script:VersionRange) {
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit Server $v\Config\RSN.ini")
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Autodesk Revit Server $v\Config\RSN.ini")
         foreach ($u in $userDirs) {
@@ -177,7 +261,8 @@ if (-not $isRemote) {
     Write-Host ""
 
     $selInt = 0
-    if (-not [int]::TryParse((Read-Host "  Enter number").Trim(), [ref]$selInt)) {
+    $selRaw = Read-Answer -Prompt "  Enter number" -AbortReason "pass -Server <hostname> for Remote mode"
+    if (-not [int]::TryParse($selRaw.Trim(), [ref]$selInt)) {
         Write-Fail "Invalid input. Exiting."; exit 1
     }
 
@@ -188,13 +273,15 @@ if (-not $isRemote) {
         Write-Host ""
         Write-Host "  Hostname, IP, or FQDN  (e.g. REVIT-SRV / 10.0.0.50 / revit.company.com)" -ForegroundColor Yellow
         Write-Host ""
-        $serverHost = (Read-Host "  Server").Trim()
+        $serverHost = (Read-Answer -Prompt "  Server" -AbortReason "server hostname").Trim()
         if ([string]::IsNullOrWhiteSpace($serverHost)) { Write-Fail "No input. Exiting."; exit 1 }
         Write-OK "Server: $serverHost"
     } else {
         Write-Fail "Invalid selection. Exiting."; exit 1
     }
+}
 
+if ($isRemote) {
     Write-Info "Pinging $serverHost ..."
     $ping = Test-Connection -ComputerName $serverHost -Count 1 -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Select-Object -First 1
     if ($ping) { Write-OK "Host reachable." }
@@ -217,10 +304,10 @@ $toolPathPatterns = @(
 
 $detectedTools = [System.Collections.Generic.List[PSCustomObject]]::new()
 
-Write-Host "  Scanning versions 2020-2027..." -ForegroundColor White
+Write-Host "  Scanning versions $($script:VersionRange[0])-$($script:VersionRange[-1])..." -ForegroundColor White
 Write-Host ""
 
-foreach ($v in 2020..2027) {
+foreach ($v in $script:VersionRange) {
     foreach ($pat in $toolPathPatterns) {
         $p = $pat.Replace("{VER}", "$v")
         if (Test-Path $p) {
@@ -235,11 +322,11 @@ foreach ($v in 2020..2027) {
 if ($detectedTools.Count -eq 0) {
     Write-Warn "revitservertool.exe not found automatically."
     Write-Host ""
-    $manualTool = Read-Host "  Full path to revitservertool.exe (or Enter to abort)"
+    $manualTool = Read-Answer -Prompt "  Full path to revitservertool.exe (or Enter to abort)" -AbortReason "revitservertool.exe not found"
     if ([string]::IsNullOrWhiteSpace($manualTool) -or -not (Test-Path $manualTool.Trim())) {
         Write-Fail "Not found. Cannot continue."; exit 1
     }
-    $manualVer = Read-Host "  Revit version for this tool (e.g. 2026)"
+    $manualVer = Read-Answer -Prompt "  Revit version for this tool (e.g. 2026)" -AbortReason "Revit version"
     $detectedTools.Add([PSCustomObject]@{
         Version = $manualVer.Trim()
         ToolExe = $manualTool.Trim()
@@ -253,9 +340,20 @@ if ($detectedTools.Count -eq 0) {
 Write-Title "Step 4: Revit Version"
 
 $selectedTool = $null
-if ($detectedTools.Count -eq 1) {
+if ($RevitVersion) {
+    $selectedTool = $detectedTools | Where-Object { $_.Version -eq "$RevitVersion" } | Select-Object -First 1
+    if ($null -eq $selectedTool) {
+        Write-Fail "Revit $RevitVersion requested but no matching revitservertool.exe found."
+        exit 1
+    }
+    Write-OK "Selected: Revit $($selectedTool.Version)  (from parameter)"
+} elseif ($detectedTools.Count -eq 1) {
     $selectedTool = $detectedTools[0]
     Write-OK "Auto-selected: Revit $($selectedTool.Version)"
+} elseif (-not $script:Interactive) {
+    # Multiple installs, no -RevitVersion: take the newest and say so.
+    $selectedTool = $detectedTools | Sort-Object { [int]$_.Version } | Select-Object -Last 1
+    Write-Warn "Multiple versions found - using newest: Revit $($selectedTool.Version). Pass -RevitVersion to pin."
 } else {
     Write-Host "  Pick the version matching your Revit Server:" -ForegroundColor White
     Write-Host "  (tool version must match server version)" -ForegroundColor DarkGray
@@ -298,7 +396,7 @@ if ($null -ne $testResp) {
     Write-OK "REST API connected: $apiBase"
     Write-Host ""
     Write-Info "Crawling model tree..."
-    $rsnPaths = Get-RSNModels -BaseUrl $apiBase -FolderRSNPath ""
+    $rsnPaths = Get-RSNModelPath -BaseUrl $apiBase -FolderRSNPath ""
     $models   = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($rsnPath in $rsnPaths) {
         $models.Add([PSCustomObject]@{ Name = [System.IO.Path]::GetFileName($rsnPath); RSNPath = $rsnPath })
@@ -310,9 +408,12 @@ if ($null -ne $testResp) {
     Write-Host "    - Revit Server service running on $serverHost"       -ForegroundColor DarkGray
     Write-Host "    - Port 80 open in Windows Firewall on $serverHost"   -ForegroundColor DarkGray
     Write-Host "    - Version match (selected: $version)"                -ForegroundColor DarkGray
+    if ($script:LastApiError) {
+        Write-Host "    - Last error: $($script:LastApiError)"           -ForegroundColor DarkGray
+    }
     Write-Host ""
 
-    $cont = Read-Host "  Use filesystem scan of Projects folder instead? (Y/N)"
+    $cont = Read-Answer -Prompt "  Use filesystem scan of Projects folder instead? (Y/N)" -AbortReason "REST API unreachable"
     if ($cont.Trim().ToUpper() -ne "Y") { exit 1 }
 
     Write-Host ""
@@ -346,7 +447,7 @@ foreach ($m in $models) {
 }
 if ($modelCount -eq 0) {
     Write-Warn "No models found."
-    if ((Read-Host "  Continue anyway? (Y/N)").Trim().ToUpper() -ne "Y") { exit 0 }
+    if ((Read-Answer -Prompt "  Continue anyway? (Y/N)" -AbortReason "server returned zero models").Trim().ToUpper() -ne "Y") { exit 0 }
 }
 
 # ----------------------------------------------------------------
@@ -354,9 +455,10 @@ if ($modelCount -eq 0) {
 # ----------------------------------------------------------------
 Write-Title "Step 6: Backup Destination"
 
-$backupRoot = Get-BackupRoot
-$stamp      = Get-Date -Format "yyyyMMdd_HHmm"
-$backupDest = Join-Path $backupRoot "RevitServer_RVT_Backup\${stamp}_${version}_${serverHost}"
+$backupRootPath  = Get-EffectiveBackupRoot -Configured $BackupRoot
+$backupContainer = Join-Path $backupRootPath "RevitServer_RVT_Backup"
+$stamp           = Get-Date -Format "yyyyMMdd_HHmm"
+$backupDest      = Join-Path $backupContainer "${stamp}_${version}_${serverHost}"
 
 New-Item -ItemType Directory -Path $backupDest -Force | Out-Null
 Write-OK "Destination:"
@@ -422,7 +524,7 @@ $failCount    = [int]($failList    | Measure-Object).Count
 
 $manifestPath = Join-Path $backupDest "_BACKUP_MANIFEST.txt"
 $mf = [System.Collections.Generic.List[string]]::new()
-$mf.Add("rs-tool v9  //  Revit Server RVT Backup Manifest")
+$mf.Add("rs-tool v10  //  Revit Server RVT Backup Manifest")
 $mf.Add("=" * 64)
 $mf.Add("Date          : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
 $mf.Add("Mode          : $(if ($isRemote) { 'REMOTE' } else { 'LOCAL' })")
@@ -461,6 +563,31 @@ $mf | Out-File -FilePath $manifestPath -Encoding UTF8
 Write-OK "Manifest: $manifestPath"
 
 # ----------------------------------------------------------------
+# STEP 9 - Retention (-KeepLast)
+# ----------------------------------------------------------------
+if ($KeepLast -gt 0) {
+    Write-Title "Step 9: Retention"
+    # Only touch direct children of RevitServer_RVT_Backup that match
+    # this tool's timestamp naming - nothing else gets deleted.
+    $backupFolders = Get-ChildItem -Path $backupContainer -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d{8}_\d{4}_' } |
+        Sort-Object Name -Descending
+    $obsolete = $backupFolders | Select-Object -Skip $KeepLast
+    if ($obsolete) {
+        foreach ($old in $obsolete) {
+            try {
+                Remove-Item -Path $old.FullName -Recurse -Force -ErrorAction Stop
+                Write-OK "Removed old backup: $($old.Name)"
+            } catch {
+                Write-Warn "Could not remove $($old.Name): $($_.Exception.Message)"
+            }
+        }
+    } else {
+        Write-Info "Nothing to clean up ($(($backupFolders | Measure-Object).Count) backup(s), keeping $KeepLast)."
+    }
+}
+
+# ----------------------------------------------------------------
 # DONE
 # ----------------------------------------------------------------
 Write-Host ""
@@ -476,11 +603,16 @@ Write-Host ""
 Write-Host "  $backupDest" -ForegroundColor Cyan
 Write-Host ""
 
-if (-not $isWindowsServer) {
+if ($script:Interactive -and -not $isWindowsServer) {
     $open = Read-Host "  Open folder in Explorer? (Y/N)"
     if ($open.Trim().ToUpper() -eq "Y") { Start-Process explorer.exe $backupDest }
 }
 
-Write-Host ""
-Write-Host "  Press Enter to exit." -ForegroundColor DarkGray
-Read-Host | Out-Null
+if ($script:Interactive) {
+    Write-Host ""
+    Write-Host "  Press Enter to exit." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+}
+
+if ($failCount -gt 0) { exit 2 }
+exit 0
