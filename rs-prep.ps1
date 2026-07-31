@@ -87,8 +87,9 @@ $requiredFeatures = @(
     @{ Name = "Web-ASP";                  Label = "IIS - ASP" }
     @{ Name = "Web-CGI";                  Label = "IIS - CGI" }
     @{ Name = "Web-Includes";             Label = "IIS - Server Side Includes" }
+    # Web-Lgcy-Mgmt-Console (IIS 6 Management Console) is deliberately absent:
+    # removed from Windows Server 2025, and not in Autodesk's checkbox list.
     @{ Name = "Web-Metabase";             Label = "IIS 6 - Metabase Compatibility" }
-    @{ Name = "Web-Lgcy-Mgmt-Console";    Label = "IIS 6 - Management Console" }
     @{ Name = "Web-Lgcy-Scripting";       Label = "IIS 6 - Scripting Tools" }
     @{ Name = "Web-WMI";                  Label = "IIS 6 - WMI Compatibility" }
     @{ Name = "Web-Mgmt-Console";         Label = "IIS - Management Console" }
