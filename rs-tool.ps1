@@ -239,6 +239,8 @@ if (-not $isRemote) {
         Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
     )
     foreach ($v in $script:VersionRange) {
+        # Machine-wide client list - what Revit reads and rs-host.ps1 writes
+        $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit\Autodesk Revit $v\RSN.ini")
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit Server $v\Config\RSN.ini")
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Autodesk Revit Server $v\Config\RSN.ini")
         foreach ($u in $userDirs) {
