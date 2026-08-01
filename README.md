@@ -2,7 +2,9 @@
 
 Revit Server backup tool. Exports all models from a Revit Server to local `.rvt` files.
 
-Companion script: [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh Windows Server for the Revit Server installer — see [Preparing a server](#preparing-a-server-rs-prepps1).
+Companion scripts:
+- [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh Windows Server for the Revit Server installer — see [Preparing a server](#preparing-a-server-rs-prepps1).
+- [`rs-host.ps1`](rs-host.ps1) gives each Revit Server a readable name and registers it in `RSN.ini` for the right Revit versions — see [Naming servers](#naming-servers-rs-hostps1).
 
 ```powershell
 irm https://tebin.pro/rs | iex
@@ -150,3 +152,71 @@ Installs everything a fresh **Windows Server 2022 / 2025** needs before running 
 ```
 
 Run as **Administrator**. Reports whether a restart is required before installing Revit Server. Exit codes: `0` ready, `1` fatal / unsupported OS, `2` feature install failed.
+
+---
+
+## Naming servers (`rs-host.ps1`)
+
+Run on the **workstation**. Turns bare IPs into names people can read, and puts those names where Revit looks for them:
+
+1. writes `IP  NAME` lines into `C:\Windows\System32\drivers\etc\hosts`, inside a managed block (`# >>> rs-host ... # <<< rs-host <<<`) so re-runs update instead of duplicating;
+2. writes each server into `C:\ProgramData\Autodesk\Revit\Autodesk Revit <year>\RSN.ini` for the versions it serves — this is the list shown in Revit's *Open → Revit Server*;
+3. verifies: flushes the DNS cache, resolves each name, probes TCP 80, prints the admin-console URL.
+
+**You choose what goes where.** Run it plain and it asks:
+
+```text
+  What should this run write?
+    1  hosts + RSN.ini, RSN.ini gets the NAME      (recommended)
+    2  hosts + RSN.ini, RSN.ini gets the IP
+    3  hosts + RSN.ini, RSN.ini gets NAME and IP
+    4  hosts only        - readable names, RSN.ini untouched
+    5  RSN.ini only (IP) - no hosts entry needed at all
+```
+
+or pass it non-interactively: `-Target Both|Hosts|Rsn` (which files) and `-RsnEntry Name|Ip|Both` (what each `RSN.ini` line contains). Switching between forms is clean — the previous form of a managed server is removed, so you never end up with the name and the IP stacking up by accident.
+
+The server list is the `$SERVERS` table at the top of the script — the only part you edit:
+
+```powershell
+$SERVERS = @(
+    @{ Ip = "10.253.9.2";   Name = "AVRORA";    Revit = @(2023); Note = "Avrora" }
+    @{ Ip = "10.253.11.26"; Name = "TEBIN-lab"; Revit = @(2025); Note = "TEBIN lab" }
+    @{ Ip = "10.253.9.34";  Name = "CERSANIT";  Revit = @(2025); Note = "Cersanit" }
+    @{ Ip = "10.253.11.26"; Name = "DRAGON";    Revit = @(2026); Note = "Dragon" }
+)
+```
+
+One machine running two Revit Server versions gets **one entry per name** — the same IP twice is expected, not a mistake (`TEBIN-lab` and `DRAGON` above). Names must be valid host names: letters, digits, hyphen.
+
+```powershell
+# interactive - all servers
+.\rs-host.ps1
+
+# dry run - show every line that would be written
+.\rs-host.ps1 -WhatIf
+
+# only one server
+.\rs-host.ps1 -Only AVRORA
+
+# leave hosts alone - RSN.ini gets plain IPs
+.\rs-host.ps1 -Target Rsn -RsnEntry Ip -NonInteractive
+
+# names in hosts, and RSN.ini lists name + IP
+.\rs-host.ps1 -RsnEntry Both -NonInteractive
+
+# unattended cleanup of everything the script manages
+.\rs-host.ps1 -Remove -NonInteractive
+```
+
+| Parameter | Purpose |
+|---|---|
+| `-Only <name\|ip>` | Process only these entries |
+| `-Target Both\|Hosts\|Rsn` | Which files to write (default `Both`) |
+| `-RsnEntry Name\|Ip\|Both` | What each `RSN.ini` line contains (default `Name`) |
+| `-Remove` | Delete the managed hosts block and the managed names from `RSN.ini` |
+| `-Force` | Comment out conflicting hosts lines (same name, other IP) without asking |
+| `-SkipVerify` | No DNS / TCP checks |
+| `-NonInteractive` | Never prompt |
+
+Both files are backed up (`*.rs-host-<timestamp>.bak`) before the first change of a run, and entries in `RSN.ini` that the script does not manage are preserved. Exit codes: `0` success, `1` fatal / bad input, `2` written but a check failed.
