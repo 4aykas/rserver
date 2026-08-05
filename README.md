@@ -4,7 +4,7 @@ Revit Server backup tool. Exports all models from a Revit Server to local `.rvt`
 
 Companion scripts:
 - [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh Windows Server for the Revit Server installer — see [Preparing a server](#preparing-a-server-rs-prepps1).
-- [`rs-host.ps1`](rs-host.ps1) gives each Revit Server a readable name and registers it in `RSN.ini` for the right Revit versions — see [Naming servers](#naming-servers-rs-hostps1).
+- [`rs-host.ps1`](rs-host.ps1) gives each Revit Server a readable name and registers it in `RSN.ini` for the right Revit versions — `irm https://tebin.pro/rs-host | iex`, see [Naming servers](#naming-servers-rs-hostps1).
 
 ```powershell
 irm https://tebin.pro/rs | iex
@@ -188,6 +188,16 @@ $SERVERS = @(
 ```
 
 One machine running two Revit Server versions gets **one entry per name** — the same IP twice is expected, not a mistake (`TEBIN-lab` and `DRAGON` above). Names must be valid host names: letters, digits, hyphen.
+
+```powershell
+# interactive - all servers, straight from the repo (elevated PowerShell)
+irm https://tebin.pro/rs-host | iex
+
+# same, but with parameters - `irm | iex` cannot pass them, a scriptblock can
+& ([scriptblock]::Create((irm https://tebin.pro/rs-host))) -WhatIf
+```
+
+Running from memory this way sidesteps both traps of a downloaded copy: the execution policy never applies (there is no file), and there is no Mark-of-the-Web to `Unblock-File`. If you do save the script, take it from `raw.githubusercontent.com` — the GitHub *page* URL saves the HTML page, which fails to parse.
 
 ```powershell
 # interactive - all servers
