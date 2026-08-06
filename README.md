@@ -3,7 +3,7 @@
 Revit Server backup tool. Exports all models from a Revit Server to local `.rvt` files.
 
 Companion scripts:
-- [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh Windows Server for the Revit Server installer — see [Preparing a server](#preparing-a-server-rs-prepps1).
+- [`rs-prep.ps1`](rs-prep.ps1) prepares a fresh host — Windows Server, or Windows 10/11 — for the Revit Server installer, see [Preparing a server](#preparing-a-server-rs-prepps1).
 - [`rs-host.ps1`](rs-host.ps1) gives each Revit Server a readable name and registers it in `RSN.ini` for the right Revit versions — `irm https://tebin.pro/rs-host | iex`, see [Naming servers](#naming-servers-rs-hostps1).
 
 ```powershell
@@ -134,7 +134,7 @@ Manifest records: date, OS, mode, server, Revit version, tool version, discovery
 
 ## Preparing a server (`rs-prep.ps1`)
 
-Installs everything a fresh **Windows Server 2022 / 2025** needs before running the Revit Server installer, per Autodesk's official prerequisites:
+Installs everything a fresh **Windows Server 2022 / 2025** — or a **Windows 10 / 11** host — needs before running the Revit Server installer, per Autodesk's official prerequisites:
 
 - **Web Server (IIS)** role with ASP, CGI, Server Side Includes, ASP.NET 4.8, and the IIS 6 Management Compatibility set (metabase, console, scripting tools, WMI)
 - **.NET Framework 4.8** ASP.NET + WCF HTTP/TCP Activation (presence of 4.8 itself is verified — it ships in-box)
@@ -151,7 +151,24 @@ Installs everything a fresh **Windows Server 2022 / 2025** needs before running 
 .\rs-prep.ps1 -WhatIf
 ```
 
-Run as **Administrator**. Reports whether a restart is required before installing Revit Server. Exit codes: `0` ready, `1` fatal / unsupported OS, `2` feature install failed.
+Run as **Administrator**. Reports whether a restart is required before installing Revit Server. Exit codes: `0` ready, `1` fatal / no feature cmdlets on the host, `2` feature install failed.
+
+**Windows 10 / 11.** The same components exist on client Windows, but under DISM's own names and behind a different cmdlet, so the script picks the stack from what the host actually has rather than from its name — `Install-WindowsFeature` on Server, `Enable-WindowsOptionalFeature -All` on a client. Autodesk supports Revit Server on Windows Server only; on a client the script says so up front and asks before touching anything. On the client stack features install one at a time (DISM has no bulk form), so one bad name costs one feature, not the batch.
+
+| Autodesk / Server feature | Windows 10 / 11 name |
+|---|---|
+| `Web-Server` | `IIS-WebServer` |
+| `NET-Framework-45-ASPNET` | `NetFx4Extended-ASPNET45` |
+| `NET-WCF-HTTP-Activation45` | `WCF-HTTP-Activation45` |
+| `NET-WCF-TCP-Activation45` | `WCF-TCP-Activation45` |
+| `Web-Asp-Net45` | `IIS-ASPNET45` |
+| `Web-ASP` | `IIS-ASP` |
+| `Web-CGI` | `IIS-CGI` |
+| `Web-Includes` | `IIS-ServerSideIncludes` |
+| `Web-Metabase` | `IIS-Metabase` |
+| `Web-Lgcy-Scripting` | `IIS-LegacyScripts` |
+| `Web-WMI` | `IIS-WMICompatibility` |
+| `Web-Mgmt-Console` | `IIS-ManagementConsole` |
 
 ---
 
