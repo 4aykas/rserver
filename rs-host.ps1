@@ -11,8 +11,11 @@
          (C:\Windows\System32\drivers\etc\hosts) inside a managed block,
          so re-runs update rather than duplicate.
       2. Writes each server into RSN.ini for the Revit versions it serves
-         (C:\ProgramData\Autodesk\Revit\Autodesk Revit <year>\RSN.ini),
-         which is the list Revit shows in "Open > Revit Server".
+         (C:\ProgramData\Autodesk\Revit Server <release>\Config\RSN.ini),
+         which is the list Revit shows in "Open > Revit Server". That one
+         path is what Autodesk documents for every role - workstation,
+         Accelerator, Admin server - and it holds even where no Revit
+         Server is installed.
 
     You choose what goes where:
 
@@ -242,8 +245,20 @@ function Test-HostNameValid {
 }
 
 function Get-RsnPath {
-    # The client-side list Revit reads. Revit Server's own config lives
-    # elsewhere and is deliberately not touched.
+    # The one location Autodesk documents, and it is the same on every
+    # role - workstation, Accelerator, Admin server:
+    #   C:\ProgramData\Autodesk\Revit Server <release>\Config\RSN.ini
+    # https://help.autodesk.com/cloudhelp/2025/ENU/Revit-Installation/files/GUID-00163A5A-1379-4743-87B7-DBBBBF00FC93.htm
+    # Note it is NOT under ...\Autodesk\Revit\Autodesk Revit <release>\ -
+    # that is Revit's own application data (Revit.ini), and a RSN.ini
+    # dropped there is never read.
+    param([int]$Version)
+    return "C:\ProgramData\Autodesk\Revit Server $Version\Config\RSN.ini"
+}
+
+function Get-LegacyRsnPath {
+    # Where versions of this script before 2026-08-07 wrongly wrote. Only
+    # used to tell the user a dead file is lying around.
     param([int]$Version)
     return "C:\ProgramData\Autodesk\Revit\Autodesk Revit $Version\RSN.ini"
 }
@@ -410,16 +425,23 @@ if ($script:Interactive -and -not $WhatIfPreference) {
 # ----------------------------------------------------------------
 Write-Title "Step 2: hosts file"
 
+# A hosts problem must not cost the RSN.ini work: it used to exit 1 here,
+# so a locked or hand-mangled hosts file meant Step 3 never ran and no
+# RSN.ini appeared - with the hosts error as the only clue.
+$hostsFailed = [System.Collections.Generic.List[string]]::new()
+
 if (-not $doHosts) {
     Write-Info "Skipped - RSN.ini only."
 }
 else {
+:hostsStep do {
 
 Write-Info $HOSTS_PATH
 
 if (-not (Test-Path -LiteralPath $HOSTS_PATH)) {
     Write-Fail "hosts file not found: $HOSTS_PATH"
-    exit 1
+    $hostsFailed.Add("hosts file not found")
+    break hostsStep
 }
 
 $hostLines = Get-FileLine $HOSTS_PATH
@@ -433,7 +455,8 @@ for ($i = 0; $i -lt $hostLines.Count; $i++) {
 }
 if ($beginIdx -ge 0 -and $endIdx -lt 0) {
     Write-Fail "hosts file has an unterminated rs-host block (missing '$BLOCK_END'). Fix it by hand first."
-    exit 1
+    $hostsFailed.Add("hosts has an unterminated rs-host block")
+    break hostsStep
 }
 
 $outside = [System.Collections.Generic.List[string]]::new()
@@ -508,12 +531,18 @@ if ($before -eq $after) {
             Write-OK $(if ($Remove) { "Managed block removed." } else { "Managed block written ($($entries.Count) name(s))." })
         } catch {
             Write-Fail "Could not write hosts: $($_.Exception.Message)"
-            exit 1
+            $hostsFailed.Add("hosts not written: $($_.Exception.Message)")
+            break hostsStep
         }
     }
 }
 
+} while ($false)   # do/while($false): a plain block that `break` can leave
 }   # end: hosts file
+
+if ($hostsFailed.Count -gt 0 -and $doRsn) {
+    Write-Warn "Carrying on to RSN.ini regardless - it does not depend on hosts."
+}
 
 # ----------------------------------------------------------------
 # STEP 3 - RSN.ini per Revit version
@@ -539,6 +568,15 @@ foreach ($v in $(if ($doRsn) { $allVersions } else { @() })) {
     Write-Info $rsn
     if (-not (Test-Path -LiteralPath $revitExe)) {
         Write-Warn "Revit $v is not installed here - writing the file anyway."
+    }
+
+    # Versions of this script before 2026-08-07 wrote to Revit's own
+    # application-data folder, where nothing ever reads RSN.ini.
+    $legacyRsn = Get-LegacyRsnPath $v
+    if (Test-Path -LiteralPath $legacyRsn) {
+        Write-Warn "Dead file from an older run of this script (Revit does not read it):"
+        Write-Host "        $legacyRsn" -ForegroundColor DarkYellow
+        Write-Host "        Safe to delete." -ForegroundColor DarkGray
     }
 
     $rsnLines = Get-FileLine $rsn
@@ -597,6 +635,11 @@ foreach ($v in $(if ($doRsn) { $allVersions } else { @() })) {
             Backup-Once $rsn
             try {
                 Add-TextLine -Path $rsn -Lines $toAdd
+                # Prove it. A write that quietly does not happen is the
+                # exact failure this script already shipped once.
+                if (-not (Test-Path -LiteralPath $rsn)) {
+                    throw "the file still does not exist after writing"
+                }
                 if ($exists) { Write-OK "Appended: $(($toAdd) -join ', ')" }
                 else         { Write-OK "Created with: $(($toAdd) -join ', ')" }
             } catch {
@@ -679,8 +722,10 @@ Write-Host "   Done" -ForegroundColor Green
 Write-Host "  ================================================================" -ForegroundColor DarkCyan
 Write-Host ""
 
+foreach ($h in $hostsFailed) { $failedChecks.Add($h) }
+
 if ($failedChecks.Count -gt 0) {
-    Write-Warn "Files are written, but some checks failed:"
+    Write-Warn "Some steps or checks did not succeed:"
     foreach ($f in $failedChecks) { Write-Host "        $f" -ForegroundColor DarkYellow }
     Write-Host ""
 } elseif (-not $Remove -and -not $WhatIfPreference) {

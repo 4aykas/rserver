@@ -177,7 +177,7 @@ Run as **Administrator**. Reports whether a restart is required before installin
 Run on the **workstation**. Turns bare IPs into names people can read, and puts those names where Revit looks for them:
 
 1. writes `IP  NAME` lines into `C:\Windows\System32\drivers\etc\hosts`, inside a managed block (`# >>> rs-host ... # <<< rs-host <<<`) so re-runs update instead of duplicating;
-2. writes each server into `C:\ProgramData\Autodesk\Revit\Autodesk Revit <year>\RSN.ini` for the versions it serves — this is the list shown in Revit's *Open → Revit Server*;
+2. writes each server into `C:\ProgramData\Autodesk\Revit Server <release>\Config\RSN.ini` for the versions it serves — this is the list shown in Revit's *Open → Revit Server*. [Autodesk documents this one path for every role](https://help.autodesk.com/cloudhelp/2025/ENU/Revit-Installation/files/GUID-00163A5A-1379-4743-87B7-DBBBBF00FC93.htm) — workstation, Accelerator, Admin server — and it applies even on a workstation with no Revit Server installed. It is **not** under `…\Autodesk\Revit\Autodesk Revit <release>\`; that is Revit's own application data (`Revit.ini`), and an `RSN.ini` placed there is never read;
 3. verifies: flushes the DNS cache, resolves each name, probes TCP 80, prints the admin-console URL.
 
 **You choose what goes where, and for which servers.** Run it plain and it asks both:

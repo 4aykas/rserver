@@ -239,9 +239,11 @@ if (-not $isRemote) {
         Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
     )
     foreach ($v in $script:VersionRange) {
-        # Machine-wide client list - what Revit reads and rs-host.ps1 writes
-        $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit\Autodesk Revit $v\RSN.ini")
+        # The documented location - what Revit reads and rs-host.ps1 writes
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit Server $v\Config\RSN.ini")
+        # Revit's own application data. Nothing reads RSN.ini here; kept
+        # only to pick up files left by rs-host before 2026-08-07.
+        $rsnCandidates.Add("C:\ProgramData\Autodesk\Revit\Autodesk Revit $v\RSN.ini")
         $rsnCandidates.Add("C:\ProgramData\Autodesk\Autodesk Revit Server $v\Config\RSN.ini")
         foreach ($u in $userDirs) {
             $rsnCandidates.Add("$u\AppData\Roaming\Autodesk\Revit\Autodesk Revit $v\RSN.ini")
