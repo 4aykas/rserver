@@ -16,15 +16,21 @@
 
     You choose what goes where:
 
-      -Target    Both  (default) | Hosts | Rsn
-                 which file(s) to touch at all.
-      -RsnEntry  Name  (default) | Ip | Both
-                 what each RSN.ini line contains - the readable name
-                 (needs the hosts entry, or real DNS), the raw IP
-                 (works with no hosts entry at all), or both lines,
-                 so Revit's list shows the name and the IP as a fallback.
+      -Target    Rsn  (default) | Hosts | Both
+                 which file(s) to touch at all. The default is the
+                 minimal one: RSN.ini only, no hosts entry needed.
+      -RsnEntry  Ip  (default) | Name | Both
+                 what each RSN.ini line contains - the raw IP (works
+                 with no hosts entry at all), the readable name (needs
+                 the hosts entry, or real DNS), or both lines, so
+                 Revit's list shows the name and the IP as a fallback.
 
-    Run without them interactively and the script asks.
+    Run without them interactively and the script asks - both for the
+    files to write and for which servers of the table to use.
+
+    RSN.ini is never rewritten: an existing file keeps its content and
+    the missing servers are appended on new lines. A missing file is
+    created. Only -Remove rewrites, and only to drop our own lines.
 
     One IP may carry several names (e.g. the same machine hosting two
     Revit Server versions) - that is expected and supported: list one
@@ -35,13 +41,14 @@
     -WhatIf previews every change without touching anything.
 
 .PARAMETER Only
-    Process only these entries (match by name or by IP). Default: all.
+    Process only these entries (match by name or by IP). Default: all,
+    or - interactively - whatever is picked at the prompt.
 
 .PARAMETER Target
-    Which files to write: Both (default), Hosts, or Rsn.
+    Which files to write: Rsn (default), Hosts, or Both.
 
 .PARAMETER RsnEntry
-    What to put in RSN.ini: Name (default), Ip, or Both.
+    What to put in RSN.ini: Ip (default), Name, or Both.
 
 .PARAMETER Remove
     Revert: delete the managed hosts block and remove the managed names
@@ -59,7 +66,8 @@
 
 .EXAMPLE
     .\rs-host.ps1
-    Interactive: writes hosts + RSN.ini for every entry, then verifies.
+    Interactive: asks what to write and for which servers, then verifies.
+    Accepting both defaults appends the IPs to RSN.ini only.
 
 .EXAMPLE
     .\rs-host.ps1 -WhatIf
@@ -70,11 +78,11 @@
     Only the AVRORA entry (and only the Revit versions it declares).
 
 .EXAMPLE
-    .\rs-host.ps1 -Target Rsn -RsnEntry Ip -NonInteractive
-    Leave hosts alone; RSN.ini gets plain IP addresses.
+    .\rs-host.ps1 -NonInteractive
+    Unattended default: RSN.ini only, plain IP addresses, hosts untouched.
 
 .EXAMPLE
-    .\rs-host.ps1 -RsnEntry Both
+    .\rs-host.ps1 -Target Both -RsnEntry Both
     hosts + RSN.ini, and RSN.ini lists both the name and the IP.
 
 .EXAMPLE
@@ -158,16 +166,31 @@ function Write-Info { param([string]$M) Write-Host "  [..]  $M" -ForegroundColor
 function Write-Warn { param([string]$M) Write-Host "  [!!]  $M" -ForegroundColor Yellow     }
 function Write-Fail { param([string]$M) Write-Host "  [XX]  $M" -ForegroundColor Red        }
 
+function Test-Approved {
+    # ShouldProcess gate that also works under `irm | iex`. There the script
+    # body is not an advanced function, so $PSCmdlet is $null and every
+    # `$PSCmdlet.ShouldProcess(...)` threw InvokeMethodOnNull - a non-
+    # terminating error, so the run continued and silently wrote nothing.
+    # -Caller is the script's own $PSCmdlet ($null under iex).
+    [CmdletBinding(SupportsShouldProcess)]
+    param([object]$Caller, [string]$Target, [string]$Action)
+    if ($null -ne $Caller) { return $Caller.ShouldProcess($Target, $Action) }
+    if ($WhatIfPreference) {
+        Write-Host "  What if: $Action -> $Target" -ForegroundColor DarkGray
+        return $false
+    }
+    return $true
+}
+
 function Backup-Once {
     # One backup per file per run, kept next to the original.
-    [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path)
     if (-not $script:BackedUp) { $script:BackedUp = @{} }
     if ($script:BackedUp.ContainsKey($Path)) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $stamp  = Get-Date -Format "yyyyMMdd-HHmmss"
     $backup = "$Path.rs-host-$stamp.bak"
-    if ($PSCmdlet.ShouldProcess($backup, "Create backup")) {
+    if (Test-Approved -Caller $PSCmdlet -Target $backup -Action "Create backup") {
         Copy-Item -LiteralPath $Path -Destination $backup -Force -ErrorAction Stop
         Write-Info "Backup: $backup"
     }
@@ -184,12 +207,33 @@ function Write-TextFile {
     [System.IO.File]::WriteAllText($Path, (($Lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
 }
 
+function Add-TextLine {
+    # Append only - the existing file keeps its bytes. Creates the file
+    # (and its folder) when missing. Adds the missing newline first if the
+    # file does not end with one, so we never glue onto the last entry.
+    param([string]$Path, [string[]]$Lines)
+    if (-not $Lines -or $Lines.Count -eq 0) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+    }
+    $prefix = ""
+    if (Test-Path -LiteralPath $Path) {
+        $current = [System.IO.File]::ReadAllText($Path)
+        if ($current.Length -gt 0 -and $current[$current.Length - 1] -ne "`n") { $prefix = "`r`n" }
+    }
+    [System.IO.File]::AppendAllText($Path, ($prefix + ($Lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+}
+
 function Get-FileLine {
+    # The leading comma matters: without it PowerShell unrolls a one-element
+    # array on return, so a single-line file came back as a bare string and
+    # $lines[0] indexed its first CHARACTER instead of the line.
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    if (-not (Test-Path -LiteralPath $Path)) { return ,@() }
     $content = Get-Content -LiteralPath $Path -ErrorAction Stop
-    if ($null -eq $content) { return @() }
-    return @($content)
+    if ($null -eq $content) { return ,@() }
+    return ,@($content)
 }
 
 function Test-HostNameValid {
@@ -262,12 +306,33 @@ if ($entries.Count -eq 0) {
     exit 1
 }
 
-Write-Host ("  {0,-16} {1,-16} {2,-16} {3}" -f "IP", "NAME", "REVIT", "NOTE") -ForegroundColor White
+Write-Host ("  {0,-4} {1,-16} {2,-16} {3,-16} {4}" -f "#", "IP", "NAME", "REVIT", "NOTE") -ForegroundColor White
 Write-Host ("  " + "-" * 62) -ForegroundColor DarkGray
-foreach ($e in $entries) {
-    Write-Host ("  {0,-16} {1,-16} {2,-16} {3}" -f $e.Ip, $e.Name, ($e.Versions -join ", "), $e.Note)
+for ($i = 0; $i -lt $entries.Count; $i++) {
+    $e = $entries[$i]
+    Write-Host ("  {0,-4} {1,-16} {2,-16} {3,-16} {4}" -f ($i + 1), $e.Ip, $e.Name, ($e.Versions -join ", "), $e.Note)
 }
 Write-Host ""
+
+# Which of them. -Only already filtered above; without it, ask.
+if ($script:Interactive -and -not $Only -and $entries.Count -gt 1) {
+    $picked = (Read-Host "  Which servers? (numbers like 1,3 - Enter = all)").Trim()
+    if ($picked -ne "" -and $picked -notmatch '^(?i)a(ll)?$') {
+        $chosen = [System.Collections.Generic.List[object]]::new()
+        $takenIdx = [System.Collections.Generic.HashSet[int]]::new()
+        foreach ($tok in @($picked -split '[,;\s]+' | Where-Object { $_ })) {
+            $n = 0
+            if (-not [int]::TryParse($tok, [ref]$n) -or $n -lt 1 -or $n -gt $entries.Count) {
+                Write-Fail "Not a valid server number: '$tok' (expected 1-$($entries.Count))."
+                exit 1
+            }
+            if ($takenIdx.Add($n)) { $chosen.Add($entries[$n - 1]) }
+        }
+        $entries = $chosen
+        Write-Info "Selected: $(($entries | ForEach-Object { $_.Name }) -join ', ')"
+    }
+    Write-Host ""
+}
 
 $allNames    = @($entries | ForEach-Object { $_.Name })
 $allIps      = @($entries | ForEach-Object { $_.Ip } | Sort-Object -Unique)
@@ -275,7 +340,7 @@ $allVersions = @($entries | ForEach-Object { $_.Versions } | Sort-Object -Unique
 
 # ----------------------------------------------------------------
 # What to write, and where. -Target / -RsnEntry win; otherwise ask
-# interactively; otherwise the defaults (Both / Name).
+# interactively; otherwise the defaults (Rsn / Ip).
 # ----------------------------------------------------------------
 function Resolve-Choice {
     param([string]$Value, [string[]]$Allowed, [string]$Label)
@@ -291,27 +356,27 @@ $RsnEntry = Resolve-Choice -Value $RsnEntry -Allowed $RSN_CHOICES    -Label "Rsn
 
 if ($script:Interactive -and ($Target -eq "" -or $RsnEntry -eq "")) {
     Write-Host "  What should this run write?" -ForegroundColor White
-    Write-Host "    1  hosts + RSN.ini, RSN.ini gets the NAME      (recommended)" -ForegroundColor Gray
-    Write-Host "    2  hosts + RSN.ini, RSN.ini gets the IP" -ForegroundColor Gray
+    Write-Host "    1  RSN.ini only (IP)  - no hosts entry needed  (default)" -ForegroundColor Gray
+    Write-Host "    2  hosts + RSN.ini, RSN.ini gets the NAME" -ForegroundColor Gray
     Write-Host "    3  hosts + RSN.ini, RSN.ini gets NAME and IP" -ForegroundColor Gray
-    Write-Host "    4  hosts only        - readable names, RSN.ini untouched" -ForegroundColor Gray
-    Write-Host "    5  RSN.ini only (IP) - no hosts entry needed at all" -ForegroundColor Gray
+    Write-Host "    4  hosts + RSN.ini, RSN.ini gets the IP" -ForegroundColor Gray
+    Write-Host "    5  hosts only         - readable names, RSN.ini untouched" -ForegroundColor Gray
     Write-Host ""
     $pick = (Read-Host "  Choice (1-5, Enter = 1)").Trim()
     if ($pick -eq "") { $pick = "1" }
     switch ($pick) {
-        "1"     { $Target = "Both";  $RsnEntry = "Name" }
-        "2"     { $Target = "Both";  $RsnEntry = "Ip"   }
+        "1"     { $Target = "Rsn";   $RsnEntry = "Ip"   }
+        "2"     { $Target = "Both";  $RsnEntry = "Name" }
         "3"     { $Target = "Both";  $RsnEntry = "Both" }
-        "4"     { $Target = "Hosts"; $RsnEntry = "Name" }
-        "5"     { $Target = "Rsn";   $RsnEntry = "Ip"   }
+        "4"     { $Target = "Both";  $RsnEntry = "Ip"   }
+        "5"     { $Target = "Hosts"; $RsnEntry = "Name" }
         default { Write-Fail "Not a valid choice: '$pick'."; exit 1 }
     }
     Write-Host ""
 }
 
-if ($Target   -eq "") { $Target   = "Both" }
-if ($RsnEntry -eq "") { $RsnEntry = "Name" }
+if ($Target   -eq "") { $Target   = "Rsn" }
+if ($RsnEntry -eq "") { $RsnEntry = "Ip"  }
 
 $doHosts = ($Target -eq "Both" -or $Target -eq "Hosts")
 $doRsn   = ($Target -eq "Both" -or $Target -eq "Rsn")
@@ -436,7 +501,7 @@ if ($before -eq $after) {
         if ($Remove) { Write-Info "remove : $($e.Name)" }
         else         { Write-Info "$($e.Ip)  ->  $($e.Name)" }
     }
-    if ($PSCmdlet.ShouldProcess($HOSTS_PATH, "Update managed rs-host block")) {
+    if (Test-Approved -Caller $PSCmdlet -Target $HOSTS_PATH -Action "Update managed rs-host block") {
         Backup-Once $HOSTS_PATH
         try {
             Write-TextFile -Path $HOSTS_PATH -Lines $newHostLines
@@ -477,48 +542,63 @@ foreach ($v in $(if ($doRsn) { $allVersions } else { @() })) {
     }
 
     $rsnLines = Get-FileLine $rsn
-    $kept     = [System.Collections.Generic.List[string]]::new()
-    $present  = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-
+    $exists   = Test-Path -LiteralPath $rsn
+    $listed   = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($line in $rsnLines) {
         $t = $line.Trim()
-        if ($t -eq "") { continue }
-        # Drop every form of a managed server - name AND IP - so switching
-        # -RsnEntry cleans up the previous form instead of stacking both.
-        if (($allNames -contains $t) -or ($allIps -contains $t)) {
-            if ($wanted -contains $t) { $present.Add($t) | Out-Null }
-            continue
-        }
-        $kept.Add($t)
+        if ($t -ne "") { $listed.Add($t) | Out-Null }
     }
 
-    $newRsn = [System.Collections.Generic.List[string]]::new()
-    foreach ($k in $kept) { $newRsn.Add($k) }
-    if (-not $Remove) {
-        foreach ($n in $wanted) { $newRsn.Add($n) }
-    }
-
-    $rsnBefore = (($rsnLines | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join "`r`n")
-    $rsnAfter  = ($newRsn -join "`r`n")
-
-    if ($rsnBefore -eq $rsnAfter -and (Test-Path -LiteralPath $rsn)) {
-        Write-OK "Already correct: $(($newRsn) -join ', ')"
-    } else {
-        foreach ($n in $wanted) {
-            if ($Remove)               { Write-Info "remove : $n" }
-            elseif ($present.Contains($n)) { Write-Info "keep   : $n" }
-            else                       { Write-Info "add    : $n" }
+    if ($Remove) {
+        # The only case that rewrites the file: drop our own lines, in
+        # either form (name or IP), and leave everything else untouched.
+        $kept       = [System.Collections.Generic.List[string]]::new()
+        $removedAny = $false
+        foreach ($line in $rsnLines) {
+            $t = $line.Trim()
+            if ($t -eq "") { continue }
+            if (($allNames -contains $t) -or ($allIps -contains $t)) {
+                Write-Info "remove : $t"
+                $removedAny = $true
+                continue
+            }
+            $kept.Add($t)
         }
-        if ($PSCmdlet.ShouldProcess($rsn, "Write RSN.ini")) {
+        if (-not $removedAny) {
+            Write-OK "Nothing of ours listed - no change."
+        } elseif (Test-Approved -Caller $PSCmdlet -Target $rsn -Action "Rewrite RSN.ini without managed entries") {
             Backup-Once $rsn
             try {
-                if ($newRsn.Count -eq 0 -and $Remove) {
+                if ($kept.Count -eq 0) {
                     Write-TextFile -Path $rsn -Lines @()
                     Write-OK "Emptied (no other servers were listed)."
                 } else {
-                    Write-TextFile -Path $rsn -Lines $newRsn
-                    Write-OK "Written: $(($newRsn) -join ', ')"
+                    Write-TextFile -Path $rsn -Lines $kept
+                    Write-OK "Kept: $(($kept) -join ', ')"
                 }
+            } catch {
+                Write-Fail "Could not write RSN.ini: $($_.Exception.Message)"
+                exit 1
+            }
+        }
+    }
+    else {
+        # Append-only. An existing file keeps every line it already has -
+        # ours and other people's - and only what is missing is added.
+        $toAdd = [System.Collections.Generic.List[string]]::new()
+        foreach ($n in $wanted) {
+            if ($listed.Contains($n)) { Write-Info "keep   : $n" }
+            else { Write-Info "add    : $n"; $toAdd.Add($n) }
+        }
+
+        if ($toAdd.Count -eq 0 -and $exists) {
+            Write-OK "Already listed: $(($wanted) -join ', ')"
+        } elseif (Test-Approved -Caller $PSCmdlet -Target $rsn -Action $(if ($exists) { "Append to RSN.ini" } else { "Create RSN.ini" })) {
+            Backup-Once $rsn
+            try {
+                Add-TextLine -Path $rsn -Lines $toAdd
+                if ($exists) { Write-OK "Appended: $(($toAdd) -join ', ')" }
+                else         { Write-OK "Created with: $(($toAdd) -join ', ')" }
             } catch {
                 Write-Fail "Could not write RSN.ini: $($_.Exception.Message)"
                 exit 1
@@ -538,7 +618,7 @@ if ($Remove -or $SkipVerify -or $WhatIfPreference) {
 } else {
     Write-Title "Step 4: Verify"
 
-    if ($PSCmdlet.ShouldProcess("DNS client cache", "Flush")) {
+    if (Test-Approved -Caller $PSCmdlet -Target "DNS client cache" -Action "Flush") {
         try { ipconfig /flushdns | Out-Null } catch { Write-Verbose "flushdns: $($_.Exception.Message)" }
     }
 

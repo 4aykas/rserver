@@ -18,7 +18,14 @@ non-interactive mode for scheduled runs.
   empty/zero default throws `ValidationMetadataException` before the script
   runs; validate manually in the body. And `#Requires` lines are silently
   ignored under `iex` — enforce admin with an explicit
-  `WindowsPrincipal.IsInRole` check.
+  `WindowsPrincipal.IsInRole` check. And `$PSCmdlet` is `$null` under `iex`
+  (the body is not an advanced function), so a bare
+  `$PSCmdlet.ShouldProcess(...)` gate throws a *non-terminating*
+  `InvokeMethodOnNull`: the run continues and silently writes nothing.
+  Route every gate through a helper that falls back to `$WhatIfPreference`.
+- Beware `return @($x)` from a function: PowerShell unrolls the one-element
+  array, so a single-line file comes back as a bare string and `$lines[0]`
+  yields its first *character*. Use `return ,@($x)`.
 - Validate before committing:
   - parse with both PS 5.1 and PS 7 parsers
   - `Invoke-ScriptAnalyzer -Severity Warning,Error` — `PSAvoidUsingWriteHost`
